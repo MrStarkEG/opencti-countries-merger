@@ -1,0 +1,30 @@
+[project]
+name = "opencti-country-merger"
+version = "0.1.0"
+description = "CLI tool to merge duplicate country entities in OpenCTI Elasticsearch"
+requires-python = ">=3.12"
+dependencies = [
+    "elasticsearch[async]>=8.0,<9.0",
+    "pycountry>=24.6.1",
+    "typer>=0.15.0",
+    "rich>=13.0.0",
+    "pydantic-settings>=2.0.0",
+    "thefuzz[speedup]>=0.22.0",
+]
+
+[project.scripts]
+opencti-country-merger = "opencti_country_merger.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opencti_country_merger"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-mock>=3.14.0",
+]
