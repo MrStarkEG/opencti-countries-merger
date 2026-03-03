@@ -1,0 +1,14 @@
+services:
+  country-merger:
+    build: .
+    container_name: country-merger
+    env_file: .env
+    environment:
+      - CRON_SCHEDULE=0 2 * * *
+      - RUN_NOW=false
+    restart: unless-stopped
+    volumes:
+      - merger-logs:/var/log
+
+volumes:
+  merger-logs:
