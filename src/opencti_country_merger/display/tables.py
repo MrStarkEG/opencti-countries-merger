@@ -119,6 +119,14 @@ def display_results(results: list[MergeResult]) -> None:
         f"{total_archived} archived, {total_deleted} deleted"
     )
 
+    # Print actual error messages
+    errors_found = [r for r in results if r.errors]
+    if errors_found:
+        console.print("\n[bold red]Error Details:[/bold red]")
+        for r in errors_found:
+            for err in r.errors:
+                console.print(f"  [red]{r.iso_code}[/red] ({r.target_id[:12]}...): {err}")
+
 
 def display_junk_results(results: list[JunkDeleteResult]) -> None:
     """Show summary of junk entity deletions."""
@@ -148,3 +156,10 @@ def display_junk_results(results: list[JunkDeleteResult]) -> None:
 
     console.print(table)
     console.print(f"\n[bold]Junk totals[/bold]: {total_rels} relationships deleted, {len(results)} entities removed")
+
+    errors_found = [r for r in results if r.errors]
+    if errors_found:
+        console.print("\n[bold red]Junk Error Details:[/bold red]")
+        for r in errors_found:
+            for err in r.errors:
+                console.print(f"  [red]{r.name}[/red] ({r.entity_id[:12]}...): {err}")
