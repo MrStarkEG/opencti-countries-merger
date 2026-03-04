@@ -136,6 +136,18 @@ class ESClient:
     # Write
     # ------------------------------------------------------------------
 
+    async def update_doc(
+        self, index: str, doc_id: str, fields: dict[str, Any]
+    ) -> None:
+        """Partial-update a document (only the given fields)."""
+        async with self._sem:
+            try:
+                await self._es.update(
+                    index=index, id=doc_id, body={"doc": fields}, refresh=True
+                )
+            except Exception as exc:
+                raise ElasticsearchError(f"update_doc {doc_id}", exc) from exc
+
     async def index_document(
         self, index: str, doc_id: str, body: dict[str, Any]
     ) -> dict[str, Any]:

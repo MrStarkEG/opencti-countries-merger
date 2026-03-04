@@ -1,11 +1,14 @@
 """Rich console output for plan preview and merge results."""
 
+from __future__ import annotations
+
 from rich.console import Console
 from rich.table import Table
 
 from opencti_country_merger.services.discovery import CountryEntity
 from opencti_country_merger.services.planner import MergePlan
 from opencti_country_merger.services.merger import MergeResult, JunkDeleteResult
+from opencti_country_merger.services.fix_names import FixNamesPlan, FixNamesResult
 
 console = Console()
 
@@ -163,3 +166,98 @@ def display_junk_results(results: list[JunkDeleteResult]) -> None:
         for r in errors_found:
             for err in r.errors:
                 console.print(f"  [red]{r.name}[/red] ({r.entity_id[:12]}...): {err}")
+
+
+# ------------------------------------------------------------------
+# fix-names display helpers
+# ------------------------------------------------------------------
+
+
+def display_fix_plan(plan: FixNamesPlan) -> None:
+    """Show summary statistics for a fix-names plan."""
+    console.print()
+    console.print(
+        f"[bold]Fix-Names Plan[/bold]: "
+        f"{len(plan.renames)} renames, "
+        f"{len(plan.alias_replacements)} alias resets, "
+        f"{len(plan.creates)} countries to create "
+        f"({plan.total_actions} total actions)"
+    )
+    if plan.warnings:
+        console.print()
+        for w in plan.warnings:
+            console.print(f"  [yellow]WARNING:[/yellow] {w}")
+
+
+def display_renames(plan: FixNamesPlan) -> None:
+    """Show a table of name changes."""
+    if not plan.renames:
+        return
+    console.print()
+    table = Table(title="Renames", show_lines=True)
+    table.add_column("ISO", style="bold cyan", width=5)
+    table.add_column("Current Name", style="yellow")
+    table.add_column("→", width=2)
+    table.add_column("New Name", style="bold green")
+    for r in plan.renames:
+        table.add_row(r.alpha_2, r.current_name, "→", r.new_name)
+    console.print(table)
+
+
+def display_alias_replacements(plan: FixNamesPlan) -> None:
+    """Show a table of alias replacements."""
+    if not plan.alias_replacements:
+        return
+    console.print()
+    table = Table(title="Alias Resets (replace all → [alpha-2] only)", show_lines=True)
+    table.add_column("ISO", style="bold cyan", width=5)
+    table.add_column("Entity Name")
+    table.add_column("Current Aliases", style="yellow")
+    table.add_column("→", width=2)
+    table.add_column("New Aliases", style="bold green")
+    for a in plan.alias_replacements:
+        current = ", ".join(a.current_aliases) if a.current_aliases else "(none)"
+        new = ", ".join(a.new_aliases)
+        table.add_row(a.alpha_2, a.entity_name, current, "→", new)
+    console.print(table)
+
+
+def display_creates(plan: FixNamesPlan) -> None:
+    """Show a table of countries to create."""
+    if not plan.creates:
+        return
+    console.print()
+    table = Table(title="Countries to Create", show_lines=True)
+    table.add_column("ISO", style="bold cyan", width=5)
+    table.add_column("Name", style="bold green")
+    table.add_column("Alpha-3", width=6)
+    for c in plan.creates:
+        table.add_row(c.alpha_2, c.name, c.alpha_3)
+    console.print(table)
+
+
+def display_fix_results(result: FixNamesResult) -> None:
+    """Show fix-names execution summary."""
+    console.print()
+    console.print("[bold]Results:[/bold]")
+    console.print(
+        f"  Renames:  [green]{result.renames_ok} ok[/green]"
+        + (f", [red]{result.renames_failed} failed[/red]" if result.renames_failed else "")
+    )
+    console.print(
+        f"  Aliases:  [green]{result.aliases_ok} ok[/green]"
+        + (f", [red]{result.aliases_failed} failed[/red]" if result.aliases_failed else "")
+    )
+    console.print(
+        f"  Creates:  [green]{result.creates_ok} ok[/green]"
+        + (f", [red]{result.creates_failed} failed[/red]" if result.creates_failed else "")
+    )
+    console.print(
+        f"\n[bold]Totals[/bold]: "
+        f"[green]{result.total_ok} succeeded[/green], "
+        f"[red]{result.total_failed} failed[/red]"
+    )
+    if result.errors:
+        console.print("\n[bold red]Error Details:[/bold red]")
+        for err in result.errors:
+            console.print(f"  [red]•[/red] {err}")
