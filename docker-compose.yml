@@ -4,8 +4,9 @@ services:
     container_name: country-merger
     env_file: .env
     environment:
+      - MERGER_COMMAND=fix-names
       - CRON_SCHEDULE=0 2 * * *
-      - RUN_NOW=false
+      - RUN_NOW=true
     restart: unless-stopped
     volumes:
       - merger-logs:/var/log
