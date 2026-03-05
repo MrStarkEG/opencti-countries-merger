@@ -82,6 +82,21 @@ class DiscoveryService:
             )
         return entities
 
+    async def fetch_all_regions(self) -> list[CountryEntity]:
+        """Fetch every Region entity from the SDO index."""
+        body = queries.entities_by_type("Region")
+        entities: list[CountryEntity] = []
+        async for hit in self._client.scroll_all(self._sdo_index, body):
+            entities.append(
+                CountryEntity(
+                    internal_id=hit["_source"]["internal_id"],
+                    index=hit["_index"],
+                    name=hit["_source"].get("name", ""),
+                    source=hit["_source"],
+                )
+            )
+        return entities
+
     async def _sample_names(self, body: dict[str, Any], n: int = 5) -> list[str]:
         resp = await self._client.search(self._sdo_index, body, size=n)
         return [h["_source"].get("name", "") for h in resp["hits"]["hits"]]

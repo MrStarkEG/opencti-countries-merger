@@ -16,14 +16,26 @@ from opencti_country_merger.display.tables import (
     display_junk,
     display_junk_results,
     display_plan,
+    display_region_creates,
+    display_region_fixes,
+    display_region_junk,
+    display_region_merges,
+    display_region_plan,
+    display_region_results,
     display_renames,
     display_results,
     display_unresolved,
+    display_link_plan,
+    display_link_actions,
+    display_link_unmatched,
+    display_link_results,
 )
 from opencti_country_merger.es.client import ESClient
 from opencti_country_merger.services.country_mapper import CountryMapper
 from opencti_country_merger.services.discovery import DiscoveryService
 from opencti_country_merger.services.fix_names import FixNamesService
+from opencti_country_merger.services.fix_regions import FixRegionsService, RegionResult
+from opencti_country_merger.services.link_regions import LinkRegionsService
 from opencti_country_merger.services.merger import MergeResult, MergerService
 from opencti_country_merger.services.planner import PlannerService
 
@@ -270,6 +282,234 @@ def fix_names(
     """Normalize country names and create missing countries via the OpenCTI API."""
     settings = Settings()
     asyncio.run(_run_fix_names(settings, threshold, dry_run, force))
+
+
+async def _run_fix_regions(
+    settings: Settings,
+    dry_run: bool,
+    force: bool,
+) -> None:
+    """Async implementation of the fix-regions pipeline."""
+    console.print("[bold]Connecting to Elasticsearch...[/bold]")
+    client = ESClient(settings)
+    try:
+        health = await client.health_check()
+        console.print(
+            f"  Cluster: [green]{health.get('cluster_name', '?')}[/green]  "
+            f"Status: [green]{health.get('status', '?')}[/green]"
+        )
+
+        # Fetch all region entities
+        console.print("\n[bold]Fetching region entities...[/bold]")
+        discovery = DiscoveryService(client)
+        entities = await discovery.fetch_all_regions()
+        console.print(f"  Fetched [bold]{len(entities)}[/bold] region entities")
+
+        # Count relationships for all regions
+        console.print("\n[bold]Counting relationships...[/bold]")
+        planner = PlannerService(client, CountryMapper())
+        rel_counts = await planner._count_relationships_batch(entities)
+
+        # Build plan
+        console.print("\n[bold]Building fix-regions plan...[/bold]")
+        plan = FixRegionsService.build_plan(entities, rel_counts)
+
+        # Display plan
+        display_region_plan(plan)
+        display_region_merges(plan)
+        display_region_fixes(plan)
+        display_region_creates(plan)
+        display_region_junk(plan)
+
+        if plan.total_actions == 0:
+            console.print(
+                "\n[green]All regions are correct. Nothing to do.[/green]"
+            )
+            return
+
+        if dry_run:
+            console.print("\n[yellow]DRY RUN — no changes made.[/yellow]")
+            return
+
+        # Confirm
+        console.print(f"\nMode: [red]LIVE[/red]")
+        console.print(
+            "[yellow]Remember to flush Redis cache and restart OpenCTI "
+            "after this completes.[/yellow]"
+        )
+        if not force:
+            confirmed = typer.confirm("Proceed with fix-regions?")
+            if not confirmed:
+                console.print("Aborted.")
+                raise typer.Exit(code=1)
+
+        result = RegionResult()
+        merger = MergerService(client, dry_run=False)
+
+        # 1. Merge duplicates
+        if plan.merge_groups:
+            console.print("\n[bold]Merging duplicate regions...[/bold]")
+            merge_results = await FixRegionsService.execute_merges(plan, merger)
+            result.merge_results = merge_results
+            for mr in merge_results:
+                if mr.errors:
+                    result.merges_failed += 1
+                    result.errors.extend(mr.errors)
+                else:
+                    result.merges_ok += 1
+
+        # 2. Fix names and aliases
+        if plan.fixes:
+            console.print("\n[bold]Fixing region names and aliases...[/bold]")
+            fix_result = await FixRegionsService.execute_fixes(plan, client)
+            result.fixes_ok = fix_result.fixes_ok
+            result.fixes_failed = fix_result.fixes_failed
+            result.errors.extend(fix_result.errors)
+
+        # 3. Create missing regions
+        if plan.creates:
+            console.print("\n[bold]Creating missing regions...[/bold]")
+            create_result = await FixRegionsService.execute_creates(plan, client)
+            result.creates_ok = create_result.creates_ok
+            result.creates_failed = create_result.creates_failed
+            result.errors.extend(create_result.errors)
+
+        # 4. Delete junk
+        if plan.junk:
+            console.print("\n[bold]Deleting junk regions...[/bold]")
+            junk_result = await FixRegionsService.execute_junk(plan, merger)
+            result.junk_ok = junk_result.junk_ok
+            result.junk_failed = junk_result.junk_failed
+            result.errors.extend(junk_result.errors)
+
+        # Display results
+        display_region_results(result)
+
+        if result.total_failed > 0:
+            console.print(
+                "\n[red]Some operations failed. Check the output above.[/red]"
+            )
+            raise typer.Exit(code=1)
+
+        console.print("\n[green]Done.[/green]")
+        console.print(
+            "[yellow]Flush Redis cache and restart OpenCTI "
+            "for changes to take effect.[/yellow]"
+        )
+    finally:
+        await client.close()
+
+
+@app.command(name="fix-regions")
+def fix_regions(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show plan without making changes."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Skip confirmation prompt."),
+    ] = False,
+) -> None:
+    """Merge duplicate regions, normalise names, and create missing UN M49 regions."""
+    settings = Settings()
+    asyncio.run(_run_fix_regions(settings, dry_run, force))
+
+
+async def _run_link_regions(
+    settings: Settings,
+    dry_run: bool,
+    force: bool,
+) -> None:
+    """Async implementation of the link-regions pipeline."""
+    console.print("[bold]Connecting to Elasticsearch...[/bold]")
+    client = ESClient(settings)
+    try:
+        health = await client.health_check()
+        console.print(
+            f"  Cluster: [green]{health.get('cluster_name', '?')}[/green]  "
+            f"Status: [green]{health.get('status', '?')}[/green]"
+        )
+
+        discovery = DiscoveryService(client)
+
+        # Fetch countries and regions
+        console.print("\n[bold]Fetching country entities...[/bold]")
+        countries = await discovery.fetch_all_countries()
+        console.print(f"  Fetched [bold]{len(countries)}[/bold] countries")
+
+        console.print("\n[bold]Fetching region entities...[/bold]")
+        regions = await discovery.fetch_all_regions()
+        console.print(f"  Fetched [bold]{len(regions)}[/bold] regions")
+
+        # Build plan
+        console.print("\n[bold]Building link plan (checking existing relationships)...[/bold]")
+        service = LinkRegionsService(client)
+        plan = await service.build_plan(countries, regions)
+
+        # Display plan
+        display_link_plan(plan)
+        display_link_actions(plan)
+        display_link_unmatched(plan)
+
+        if not plan.to_create:
+            console.print(
+                "\n[green]All countries are already linked to their regions. Nothing to do.[/green]"
+            )
+            return
+
+        if dry_run:
+            console.print("\n[yellow]DRY RUN — no changes made.[/yellow]")
+            return
+
+        # Confirm
+        console.print(f"\nMode: [red]LIVE[/red]")
+        console.print(
+            "[yellow]Remember to flush Redis cache and restart OpenCTI "
+            "after this completes.[/yellow]"
+        )
+        if not force:
+            confirmed = typer.confirm("Proceed with link-regions?")
+            if not confirmed:
+                console.print("Aborted.")
+                raise typer.Exit(code=1)
+
+        # Execute
+        console.print("\n[bold]Creating located-at relationships...[/bold]")
+        result = await service.execute(plan)
+
+        # Display results
+        display_link_results(result)
+
+        if result.failed > 0:
+            console.print(
+                "\n[red]Some operations failed. Check the output above.[/red]"
+            )
+            raise typer.Exit(code=1)
+
+        console.print("\n[green]Done.[/green]")
+        console.print(
+            "[yellow]Flush Redis cache and restart OpenCTI "
+            "for changes to take effect.[/yellow]"
+        )
+    finally:
+        await client.close()
+
+
+@app.command(name="link-regions")
+def link_regions(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show plan without making changes."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Skip confirmation prompt."),
+    ] = False,
+) -> None:
+    """Create located-at relationships between countries and their UN M49 sub-regions."""
+    settings = Settings()
+    asyncio.run(_run_link_regions(settings, dry_run, force))
 
 
 if __name__ == "__main__":
