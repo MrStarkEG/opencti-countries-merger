@@ -1,7 +1,10 @@
 """Standalone script to deduplicate country relationships in OpenCTI ES.
 
 For each (entity, country, relationship_type) combination that appears more
-than once, keeps the oldest relationship and deletes the duplicates.
+than once, checks whether the relationships are truly identical. Only deletes
+duplicates that have the same start_time, stop_time, confidence, and
+description. Relationships with different timestamps represent distinct
+incidents and are preserved.
 
 SAFETY: Every duplicate is archived to deleted_objects BEFORE deletion,
 so they can be recovered if anything goes wrong.
@@ -32,6 +35,10 @@ SCAN_INDICES = [
 ]
 
 BATCH_SIZE = 500
+
+# Default "meaningless" timestamps in OpenCTI (treated as empty)
+DEFAULT_START = "1970-01-01T00:00:00.000Z"
+DEFAULT_STOP = "5138-11-16T09:46:40.000Z"
 
 # Global for display helper
 prefix_global = ""
@@ -102,13 +109,22 @@ async def scan_duplicates(client: ESClient, prefix: str) -> list[DuplicateGroup]
                         "rel_id": src.get("internal_id", hit["_id"]),
                         "index": hit["_index"],
                         "created_at": created_at,
+                        "start_time": src.get("start_time", ""),
+                        "stop_time": src.get("stop_time", ""),
+                        "confidence": src.get("confidence", ""),
+                        "description": (src.get("description") or ""),
                         "entity_name": nc.get("name", "?"),
                         "country_name": cc.get("name", "?"),
                         "source": src,
                     })
 
     print(f"  Total relationships scanned: {total_scanned}")
-    return _build_groups(groups)
+
+    dedup_groups, skipped = _build_groups(groups)
+    print(f"  Duplicate groups (all): {len(dedup_groups) + skipped}")
+    print(f"  Skipped (different timestamps = distinct incidents): {skipped}")
+    print(f"  Truly identical (safe to dedup): {len(dedup_groups)}")
+    return dedup_groups
 
 
 def _country_nested_query() -> dict:
@@ -132,13 +148,61 @@ def _filter_country_conns(conns: list[dict], *, is_country: bool) -> list[dict]:
     return [c for c in conns if "Country" not in c.get("types", [])]
 
 
+def _normalize_time(value: str, default: str) -> str:
+    """Normalize a timestamp, treating the OpenCTI default as empty."""
+    return "" if value == default else value
+
+
+def _has_meaningful_differences(hits: list[dict]) -> bool:
+    """Check if relationships in a group have different time/conf/desc.
+
+    Returns True if the relationships represent distinct incidents
+    (different start_time, stop_time, confidence, or description)
+    and should NOT be deduplicated.
+    """
+    start_times: set[str] = set()
+    stop_times: set[str] = set()
+    confidences: set[str] = set()
+    descriptions: set[str] = set()
+
+    for h in hits:
+        st = _normalize_time(h["start_time"], DEFAULT_START)
+        sp = _normalize_time(h["stop_time"], DEFAULT_STOP)
+        start_times.add(st)
+        stop_times.add(sp)
+        confidences.add(str(h["confidence"]))
+        desc = h["description"].strip()
+        if desc:
+            descriptions.add(desc)
+
+    # Discard empty after normalization
+    start_times.discard("")
+    stop_times.discard("")
+
+    return (
+        len(start_times) > 1
+        or len(stop_times) > 1
+        or len(confidences) > 1
+        or len(descriptions) > 1
+    )
+
+
 def _build_groups(
     raw: dict[tuple[str, str, str], list[dict]],
-) -> list[DuplicateGroup]:
-    """Build DuplicateGroup objects for groups with 2+ entries."""
+) -> tuple[list[DuplicateGroup], int]:
+    """Build DuplicateGroup objects, skipping groups with meaningful diffs.
+
+    Returns (groups_to_dedup, skipped_count).
+    """
     result: list[DuplicateGroup] = []
+    skipped = 0
+
     for (eid, cid, rtype), hits in raw.items():
         if len(hits) < 2:
+            continue
+
+        if _has_meaningful_differences(hits):
+            skipped += 1
             continue
 
         sorted_hits = sorted(hits, key=lambda h: h["created_at"])
@@ -168,7 +232,7 @@ def _build_groups(
         )
         result.append(group)
 
-    return result
+    return result, skipped
 
 
 # ── Stats & Display ──
