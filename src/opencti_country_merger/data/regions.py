@@ -17,7 +17,7 @@ def _normalize(name: str) -> str:
     return re.sub(r"[-_]+", " ", name.strip()).lower()
 
 
-# 27 UN M49 sub-regions + 4 non-standard entries kept because they
+# 27 UN M49 sub-regions + 2 non-standard entries kept because they
 # commonly appear with relationships in OpenCTI.
 UN_REGIONS: list[RegionEntry] = [
     # --- UN M49 macro-regions ---
@@ -52,9 +52,13 @@ UN_REGIONS: list[RegionEntry] = [
     # --- Non-standard (no M49 code, but commonly present) ---
     RegionEntry("European Union", ""),
     RegionEntry("Middle East", ""),
-    RegionEntry("Russia", ""),
-    RegionEntry("North America", ""),
 ]
+
+# Non-standard region names that should be merged into their canonical entry.
+# Key: normalised alias → Value: normalised canonical name (must exist in UN_REGIONS).
+REGION_ALIASES: dict[str, str] = {
+    "north america": "northern america",
+}
 
 REGIONS_BY_NORM: dict[str, RegionEntry] = {
     _normalize(r.name): r for r in UN_REGIONS

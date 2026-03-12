@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from opencti_country_merger.data.regions import (
+    REGION_ALIASES,
     REGIONS_BY_NORM,
     UN_REGIONS,
     RegionEntry,
@@ -117,10 +118,11 @@ class FixRegionsService:
             plan.target_index = entities[0].index
             plan.template_source = entities[0].source
 
-        # Group entities by normalised name
+        # Group entities by normalised name (resolve aliases first)
         groups: dict[str, list[CountryEntity]] = defaultdict(list)
         for entity in entities:
             key = _normalize(entity.name)
+            key = REGION_ALIASES.get(key, key)
             groups[key].append(entity)
 
         # Walk groups and classify
